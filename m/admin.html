@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="true">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#ffffff">
+    <title>GIS Saladin</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;900&display=swap');
+        
+        * { -webkit-tap-highlight-color: transparent; }
+        
+        body {
+            font-family: 'Tajawal', sans-serif;
+            height: 100vh;
+            height: 100dvh;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: #f8fafc;
+            position: fixed;
+            width: 100%;
+        }
+
+        #map { 
+            flex-grow: 1; 
+            z-index: 1;
+            touch-action: manipulation;
+        }
+
+        .search-panel {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 1100;
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-top: 1px solid rgba(0,0,0,0.05);
+            border-radius: 28px 28px 0 0;
+            box-shadow: 0 -10px 40px rgba(0,0,0,0.1);
+            padding: 16px 16px 20px;
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            max-height: 80vh;
+            overflow-y: auto;
+            padding-bottom: max(20px, env(safe-area-inset-bottom));
+        }
+
+        @media (min-width: 768px) {
+            .search-panel {
+                top: 20px;
+                right: 20px;
+                left: auto;
+                bottom: auto;
+                width: 380px;
+                max-height: 90vh;
+                border-radius: 24px;
+                border: 1px solid rgba(0,0,0,0.1);
+                transform: translateX(0);
+            }
+            .search-hidden { transform: translateX(450px) !important; }
+        }
+
+        .search-hidden { transform: translateY(105%); }
+
+        .drag-handle {
+            width: 40px;
+            height: 5px;
+            background: #e2e8f0;
+            border-radius: 10px;
+            margin: -8px auto 16px;
+        }
+
+        .custom-popup .leaflet-popup-content-wrapper {
+            background: #1e293b;
+            color: white;
+            border-radius: 8px;
+            padding: 0;
+            text-align: center;
+        }
+        .custom-popup .leaflet-popup-tip { background: #1e293b; }
+
+        .loading-screen {
+            position: fixed;
+            inset: 0;
+            background: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+
+        .btn-action {
+            width: 48px;
+            height: 48px;
+            background: white;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            border: 1px solid #f1f5f9;
+        }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #0f172a;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 12px;
+            z-index: 10000;
+            font-size: 13px;
+            display: none;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+
+        .zone-indicator {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 500;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 8px 16px;
+            border-radius: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            font-weight: bold;
+            font-size: 14px;
+            pointer-events: none;
+            border: 1px solid #e2e8f0;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loading" class="loading-screen">
+        <div class="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+        <h2 class="text-xl font-bold mt-4">GIS Saladin</h2>
+        <p id="loadingText" class="text-slate-400 text-sm">جاري محاولة الاتصال بالسيرفر...</p>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <div id="zoneIndicator" class="zone-indicator">الموقع الحالي: غير محدد</div>
+
+    <div id="map"></div>
+
+    <button id="menuBtn" class="fixed z-[1200] bg-white p-3 rounded-2xl shadow-lg border border-slate-100" style="top: 20px; right: 20px;">
+        <svg id="menuIcon" xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+    </button>
+
+    <div class="fixed z-[1000] flex flex-col gap-3" style="top: 85px; right: 20px;">
+        <button id="locBtn" class="btn-action text-slate-700">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+            </svg>
+        </button>
+    </div>
+
+    <div id="searchPanel" class="search-panel">
+        <div class="drag-handle md:hidden"></div>
+        
+        <div class="mb-6 flex justify-between items-start">
+            <div>
+                <h1 class="text-xl font-black text-slate-900">GIS Saladin</h1>
+                <p id="counter" class="text-blue-600 text-xs font-bold mt-1">بانتظار البيانات...</p>
+            </div>
+            <div class="text-left">
+                <span id="liveStatus" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                    <span class="w-2 h-2 mr-1 bg-red-600 rounded-full animate-pulse"></span> Offline
+                </span>
+            </div>
+        </div>
+
+        <div class="space-y-4">
+            <div class="grid grid-cols-3 gap-2 p-2 bg-slate-50 rounded-2xl border border-slate-100">
+                <label class="flex flex-col items-center gap-1 cursor-pointer">
+                    <input type="checkbox" id="toggleFAT" checked class="accent-amber-500">
+                    <span class="text-[10px] font-bold">FAT</span>
+                </label>
+                <label class="flex flex-col items-center gap-1 cursor-pointer">
+                    <input type="checkbox" id="toggleFTK" checked class="accent-blue-500">
+                    <span class="text-[10px] font-bold">FTK</span>
+                </label>
+                <label class="flex flex-col items-center gap-1 cursor-pointer">
+                    <input type="checkbox" id="togglePopups">
+                    <span class="text-[10px] font-bold">أسماء</span>
+                </label>
+            </div>
+
+            <select id="zoneFilter" class="w-full bg-slate-100 p-3 rounded-xl text-sm font-bold outline-none border-none">
+                <option value="">جميع المناطق (تصفية سريعة)</option>
+                <option value="tikrit">Tikrit - تكريت</option>
+                <option value="samarra">Samarra - سامراء</option>
+                <option value="alam">Alam - العلم</option>
+                <option value="dujail">Dujail - الدجيل</option>
+                <option value="dhuluiya">Dhuluiya - الضلوعية</option>
+                <option value="tuz">Tuz - طوز خورماتو</option>
+                <option value="door">Door - الدور</option>
+                <option value="sulaiman_bek">Sulaiman Bek - سليمان بيك</option>
+                <option value="baiji">Baiji - بيجي</option>
+                <option value="shirqat">Shirqat - الشرقاط</option>
+                <option value="siniya">Siniya - الصينية</option>
+                <option value="balad">Balad - بلد</option>
+                <option value="amerli">Amerli - آمرلي</option>
+                <option value="ishaqi">Ishaqi - الإسحاقي</option>
+                <option value="hajjaj">Hajjaj - الحجاج</option>
+                <option value="zawiya">Zawiya - الزوية</option>
+                <option value="sadira">Sadira - السديرة</option>
+                <option value="yankaja">Yankaja - ينكجة</option>
+                <option value="shukra">Shukra - الشكرة</option>
+                <option value="hijal">Hijal - الهيجل</option>
+            </select>
+
+            <div class="relative">
+                <input type="text" id="mainSearch" list="zonesData" placeholder="ابحث عن اسم المنطقة..." 
+                       class="w-full bg-slate-100 p-4 rounded-xl text-sm font-bold outline-none">
+                <datalist id="zonesData"></datalist>
+            </div>
+
+            <div class="flex gap-2">
+                <button onclick="locateZone()" class="flex-[2] bg-blue-600 text-white py-3 rounded-xl font-bold">بحث</button>
+                <button onclick="clearSearch()" class="flex-1 bg-slate-200 text-slate-700 py-3 rounded-xl font-bold">مسح</button>
+            </div>
+
+            <div class="pt-4 border-t border-slate-100">
+                <p class="text-[10px] font-bold text-slate-400 mb-2">الإحداثيات (Lat, Lng)</p>
+                <div class="flex gap-2">
+                    <input type="text" id="coordsInput" placeholder="34.2, 44.3" class="flex-1 bg-slate-50 border p-3 rounded-xl text-xs">
+                    <button onclick="gotoCoords()" class="bg-slate-800 text-white px-4 rounded-xl text-xs">انتقال</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const CSV_URL = 'https://raw.githubusercontent.com/Beezincbeta/m/main/sd_data.csv?v=' + new Date().getTime();
+        
+        let map, layerFAT, layerFTK, userMarker, searchMarker, watchId = null;
+        let featuresStore = [];
+        let isSearchVisible = true;
+
+        const ZONE_RANGES = {
+            tikrit: { ranges: [[1, 44], [98, 99], [7000, 7300]], specials: [103] },
+            samarra: { ranges: [[45, 97], [100, 102], [253, 256]], specials: [] },
+            alam: { ranges: [[238, 252]], specials: [] },
+            dujail: { ranges: [[192, 207]], specials: [] },
+            dhuluiya: { ranges: [[257, 272]], specials: [] },
+            tuz: { ranges: [[128, 162]], specials: [216] },
+            door: { ranges: [[208, 215]], specials: [] },
+            sulaiman_bek: { ranges: [[278, 282]], specials: [] },
+            baiji: { ranges: [[163, 191]], specials: [312] },
+            shirqat: { ranges: [[217, 237]], specials: [] },
+            siniya: { ranges: [[288, 294]], specials: [] },
+            balad: { ranges: [[104, 127], [332, 343]], specials: [] },
+            amerli: { ranges: [[283, 287]], specials: [] },
+            ishaqi: { ranges: [[313, 314]], specials: [] },
+            hajjaj: { ranges: [[304, 311]], specials: [315] },
+            zawiya: { ranges: [[273, 277]], specials: [] },
+            sadira: { ranges: [[322, 331]], specials: [346] },
+            yankaja: { ranges: [[296, 297]], specials: [] },
+            shukra: { ranges: [[316, 321]], specials: [] },
+            hijal: { ranges: [[298, 303]], specials: [344, 345] }
+        };
+
+        window.onload = () => {
+            initMap();
+            loadDataWithFetch();
+            setupEvents();
+            checkOnlineStatus();
+        };
+
+        function initMap() {
+            map = L.map('map', { zoomControl: false, center: [34.6, 43.6], zoom: 10 });
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+            
+            map.createPane('fatPane');
+            map.getPane('fatPane').style.zIndex = 650;
+            map.getPane('fatPane').style.pointerEvents = 'none';
+
+            layerFTK = L.geoJSON(null, {
+                style: { color: '#3b82f6', weight: 1.5, fillOpacity: 0.2 },
+                onEachFeature: setupFeature
+            }).addTo(map);
+
+            layerFAT = L.geoJSON(null, {
+                pane: 'fatPane',
+                style: { color: '#d97706', weight: 3, fillOpacity: 0.4, dashArray: '5,5' },
+                onEachFeature: setupFeature
+            }).addTo(map);
+
+            map.on('moveend', () => {
+                updateCurrentZoneDisplay();
+            });
+        }
+
+        async function loadDataWithFetch() {
+            const loadingText = document.getElementById('loadingText');
+            try {
+                loadingText.innerText = "جاري جلب البيانات من ...";
+                const response = await fetch(CSV_URL);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const csvString = await response.text();
+                loadingText.innerText = "جاري تحليل البيانات وتحويلها لخريطة...";
+
+                Papa.parse(csvString, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (results) => {
+                        processData(results.data);
+                    },
+                    error: (err) => {
+                        throw new Error("فشل تحليل ملف CSV");
+                    }
+                });
+            } catch (error) {
+                console.error(error);
+                loadingText.innerHTML = `<span class="text-red-500">فشل تحميل البيانات: ${error.message}</span><br><button onclick="location.reload()" class="mt-4 bg-blue-600 text-white px-4 py-2 rounded">إعادة المحاولة</button>`;
+            }
+        }
+
+        function processData(rows) {
+            let count = 0;
+            rows.forEach(row => {
+                try {
+                    if (!row.geometry || !row.Name) return;
+                    const geo = JSON.parse(row.geometry.replace(/""/g, '"'));
+                    const name = row.Name.toUpperCase();
+                    const feat = { type: "Feature", properties: { Name: name }, geometry: geo };
+                    const isFAT = name.startsWith('FAT');
+                    const layer = isFAT ? layerFAT : layerFTK;
+                    layer.addData(feat);
+                    
+                    const tempGeo = L.geoJSON(geo);
+                    featuresStore.push({
+                        name,
+                        type: isFAT ? 'FAT' : 'FTK',
+                        bounds: tempGeo.getBounds()
+                    });
+                    count++;
+                } catch(e) {
+                    console.warn("Skipping row due to error", e);
+                }
+            });
+            
+            if (map.hasLayer(layerFAT)) layerFAT.bringToFront();
+            updateDatalist();
+            document.getElementById('counter').innerText = `${count} منطقة محملة`;
+            const loader = document.getElementById('loading');
+            if (loader) {
+                loader.style.opacity = '0';
+                setTimeout(() => loader.remove(), 500);
+            }
+        }
+
+        function checkOnlineStatus() {
+            const updateStatus = () => {
+                const status = document.getElementById('liveStatus');
+                if (!status) return;
+                if (navigator.onLine) {
+                    status.innerHTML = '<span class="w-2 h-2 mr-1 bg-green-600 rounded-full"></span> Online';
+                    status.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800';
+                } else {
+                    status.innerHTML = '<span class="w-2 h-2 mr-1 bg-red-600 rounded-full animate-pulse"></span> Offline';
+                    status.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800';
+                }
+            };
+            window.addEventListener('online', updateStatus);
+            window.addEventListener('offline', updateStatus);
+            updateStatus();
+        }
+
+        function setupFeature(f, l) {
+            const name = f.properties.Name;
+            l.bindPopup(`<div class="font-bold text-[11px] p-1">${name}</div>`, {
+                className: 'custom-popup', closeButton: false
+            });
+            l.on('click', (e) => {
+                if (e.latlng) {
+                    const coords = `${e.latlng.lat.toFixed(8)}, ${e.latlng.lng.toFixed(8)}`;
+                    copyText(coords, `إحداثيات ${name}`);
+                }
+            });
+        }
+
+        function setupEvents() {
+            document.getElementById('menuBtn').onclick = toggleSearch;
+            document.getElementById('locBtn').onclick = toggleGPS;
+            document.getElementById('toggleFAT').onchange = e => {
+                if (e.target.checked) {
+                    map.addLayer(layerFAT);
+                    layerFAT.bringToFront();
+                } else {
+                    map.removeLayer(layerFAT);
+                }
+            };
+            document.getElementById('toggleFTK').onchange = e => e.target.checked ? map.addLayer(layerFTK) : map.removeLayer(layerFTK);
+            document.getElementById('togglePopups').onchange = toggleNames;
+            document.getElementById('zoneFilter').onchange = filterByArea;
+        }
+
+        function findZoneByFTKName(name) {
+            if (!name) return null;
+            const match = name.match(/\d+/);
+            if (!match) return null;
+            const num = parseInt(match[0]);
+            for (const [zoneKey, data] of Object.entries(ZONE_RANGES)) {
+                if (data.specials && data.specials.includes(num)) return zoneKey;
+                if (data.ranges) {
+                    const inRange = data.ranges.some(([min, max]) => num >= min && num <= max);
+                    if (inRange) return zoneKey;
+                }
+            }
+            return null;
+        }
+
+        function updateCurrentZoneDisplay() {
+            if (!map || !layerFTK) return;
+            try {
+                const center = map.getCenter();
+                // Verifying center object is valid
+                if (!center || typeof center.lat !== 'number' || isNaN(center.lat)) return;
+
+                let currentZoneName = "خارج النطاق";
+                layerFTK.eachLayer(l => {
+                    // Critical fix: checking if bounds are valid and defined
+                    if (l && l.getBounds) {
+                        const bounds = l.getBounds();
+                        if (bounds && bounds.isValid() && bounds.contains(center)) {
+                            const zoneKey = findZoneByFTKName(l.feature.properties.Name);
+                            if (zoneKey) currentZoneName = zoneKey.charAt(0).toUpperCase() + zoneKey.slice(1);
+                        }
+                    }
+                });
+                const indicator = document.getElementById('zoneIndicator');
+                if (indicator) indicator.innerText = `الموقع الحالي: ${currentZoneName}`;
+            } catch (err) {
+                console.error("Error updating zone display:", err);
+            }
+        }
+
+        function toggleSearch() {
+            isSearchVisible = !isSearchVisible;
+            document.getElementById('searchPanel').classList.toggle('search-hidden', !isSearchVisible);
+            document.getElementById('menuIcon').innerHTML = isSearchVisible 
+                ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />'
+                : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7" />';
+        }
+
+        function locateZone() {
+            const query = document.getElementById('mainSearch').value.toUpperCase().trim();
+            const target = featuresStore.find(f => f.name === query);
+            if (target && target.bounds && target.bounds.isValid()) {
+                const center = target.bounds.getCenter();
+                map.fitBounds(target.bounds, { padding: [50, 50], maxZoom: 16 });
+                if (searchMarker) map.removeLayer(searchMarker);
+                searchMarker = L.marker(center).addTo(map)
+                    .bindPopup(`<div class="font-bold text-[11px] p-1">${target.name}</div>`, { className: 'custom-popup' })
+                    .openPopup();
+                if (window.innerWidth < 768) toggleSearch();
+            } else {
+                showToast("المنطقة غير موجودة");
+            }
+        }
+
+        function filterByArea() {
+            const zoneKey = document.getElementById('zoneFilter').value;
+            if (!zoneKey) {
+                layerFTK.setStyle({ fillOpacity: 0.2, weight: 1.5, color: '#3b82f6' });
+                return;
+            }
+            const data = ZONE_RANGES[zoneKey];
+            let foundLayers = [];
+            layerFTK.eachLayer(l => {
+                const name = l.feature.properties.Name;
+                const numMatch = name.match(/\d+/);
+                const num = numMatch ? parseInt(numMatch[0]) : null;
+                const isMatch = num !== null && (data.specials.includes(num) || data.ranges.some(r => num >= r[0] && num <= r[1]));
+                if (isMatch) {
+                    l.setStyle({ fillOpacity: 0.6, weight: 3, color: '#2563eb' });
+                    foundLayers.push(l);
+                } else {
+                    l.setStyle({ fillOpacity: 0.05, weight: 0.5, color: '#94a3b8' });
+                }
+            });
+            if (foundLayers.length > 0) {
+                const group = L.featureGroup(foundLayers);
+                if (group.getBounds().isValid()) map.fitBounds(group.getBounds(), { padding: [60, 60] });
+            }
+        }
+
+        function toggleNames(e) {
+            const show = e.target.checked;
+            [layerFAT, layerFTK].forEach(layer => layer.eachLayer(l => show ? l.openPopup() : l.closePopup()));
+        }
+
+        function toggleGPS() {
+            if (watchId) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+                if (userMarker) map.removeLayer(userMarker);
+                document.getElementById('locBtn').classList.remove('bg-blue-600', 'text-white');
+                showToast("تم إيقاف التتبع");
+            } else {
+                document.getElementById('locBtn').classList.add('bg-blue-600', 'text-white');
+                watchId = navigator.geolocation.watchPosition(p => {
+                    const pos = [p.coords.latitude, p.coords.longitude];
+                    if (!userMarker) {
+                        userMarker = L.circleMarker(pos, { color: 'white', fillColor: '#2563eb', fillOpacity: 1, radius: 8, weight: 3 }).addTo(map);
+                        map.setView(pos, 15);
+                    } else {
+                        userMarker.setLatLng(pos);
+                    }
+                }, () => showToast("تعذر تحديد الموقع"), { enableHighAccuracy: true });
+            }
+        }
+
+        function gotoCoords() {
+            const val = document.getElementById('coordsInput').value;
+            const parts = val.split(',').map(p => parseFloat(p.trim()));
+            if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+                const latlng = L.latLng(parts[0], parts[1]);
+                map.setView(latlng, 16);
+                if (searchMarker) map.removeLayer(searchMarker);
+
+                let popupName = `${parts[0].toFixed(8)}, ${parts[1].toFixed(8)}`;
+                layerFAT.eachLayer(l => {
+                    try {
+                        if (l.getBounds && l.getBounds().isValid() && l.getBounds().contains(latlng)) {
+                            popupName = l.feature.properties.Name;
+                        }
+                    } catch(e) {}
+                });
+
+                searchMarker = L.marker(latlng).addTo(map)
+                    .bindPopup(`<div class="font-bold text-[11px] p-1">${popupName}</div>`, { className: 'custom-popup' })
+                    .openPopup();
+                if (window.innerWidth < 768) toggleSearch();
+            } else {
+                showToast("إحداثيات غير صحيحة");
+            }
+        }
+
+        function updateDatalist() {
+            const dl = document.getElementById('zonesData');
+            if (dl) dl.innerHTML = featuresStore.slice(0, 1000).map(f => `<option value="${f.name}">`).join('');
+        }
+
+        function clearSearch() {
+            document.getElementById('mainSearch').value = '';
+            if (searchMarker) map.removeLayer(searchMarker);
+            layerFTK.setStyle({ fillOpacity: 0.2, weight: 1.5, color: '#3b82f6' });
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            if (t) {
+                t.innerText = msg;
+                t.style.display = 'block';
+                setTimeout(() => t.style.display = 'none', 2500);
+            }
+        }
+
+        function copyText(text, label) {
+            const el = document.createElement('textarea');
+            el.value = text;
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+            showToast(`تم نسخ ${label}`);
+        }
+    </script>
+</body>
+</html>

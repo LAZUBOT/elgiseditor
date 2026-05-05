@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>0101</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;900&display=swap');
+        
+        body {
+            font-family: 'Tajawal', sans-serif;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            height: 100dvh; /* لدعم الشاشات المحمولة بشكل أفضل مع لوحة المفاتيح */
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: #f1f5f9;
+            /* حماية ضد تحديد النصوص */
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+
+        /* السماح بتحديد النص داخل مربع البحث فقط */
+        input {
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            user-select: text;
+        }
+
+        #map {
+            flex-grow: 1;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        /* Minimal Leaflet overrides */
+        .leaflet-control-zoom { border: none !important; box-shadow: 0 4px 15px rgba(0,0,0,0.1) !important; margin-top: 80px !important; }
+        .leaflet-control-zoom a { background-color: white !important; color: #1e293b !important; }
+        .custom-popup .leaflet-popup-content-wrapper { border-radius: 12px; background: #1e293b; color: white; padding: 2px 8px; font-weight: bold; text-align: center;}
+        .custom-popup .leaflet-popup-tip { background: #1e293b; }
+
+        /* Custom Scrollbar for suggestions */
+        #suggestions::-webkit-scrollbar { width: 6px; }
+        #suggestions::-webkit-scrollbar-track { background: transparent; }
+        #suggestions::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+
+        /* Toast Animation */
+        @keyframes slideDown {
+            from { transform: translate(-50%, -100%); opacity: 0; }
+            to { transform: translate(-50%, 0); opacity: 1; }
+        }
+        .toast-enter { animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    </style>
+</head>
+<body class="relative">
+
+    <!-- Loading Overlay -->
+    <div id="loading" class="absolute inset-0 z-[2000] bg-white flex flex-col items-center justify-center transition-opacity duration-500">
+        <div class="relative w-16 h-16">
+            <div class="absolute inset-0 border-4 border-slate-100 rounded-full"></div>
+            <div class="absolute inset-0 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+        <h1 class="mt-4 text-xl font-black text-slate-800">Loading</h1>
+        <p class="text-sm text-slate-500 font-bold mt-1">جاري تحميل البيانات...</p>
+    </div>
+
+    <!-- Smart Search Bar (Bottom on Mobile, Top on Desktop) -->
+    <div class="absolute bottom-6 md:bottom-auto md:top-4 left-1/2 -translate-x-1/2 w-[95%] max-w-lg z-[1000]">
+        <div class="bg-white/95 backdrop-blur-md shadow-xl border border-slate-100 rounded-2xl flex flex-col-reverse md:flex-col overflow-hidden transition-all duration-300">
+            
+            <div class="flex items-center px-4 py-3 relative">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-slate-400 ml-2 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input type="text" id="searchInput" 
+                       placeholder="ابحث بالمنطقة أو الرقم (FAT1-FTK00)..." 
+                       class="w-full bg-transparent border-none outline-none text-slate-800 font-bold placeholder-slate-400 text-[15px]"
+                       autocomplete="off"
+                       spellcheck="false">
+                <button id="clearBtn" class="hidden text-slate-400 hover:text-slate-600 p-1 shrink-0">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+            </div>
+            
+            <!-- Suggestions Dropdown (Appears above input on mobile) -->
+            <ul id="suggestions" class="max-h-[40vh] md:max-h-60 overflow-y-auto hidden border-b md:border-b-0 md:border-t border-slate-100 bg-white"></ul>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="hidden fixed top-24 left-1/2 -translate-x-1/2 z-[2000] bg-slate-900 text-white px-6 py-3 rounded-full shadow-lg font-bold text-sm flex items-center gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-emerald-400" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+        </svg>
+        <span id="toastText">تم النسخ</span>
+    </div>
+
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+
+    <script>
+        // --- حماية التطبيق ضد العبث ---
+        
+        // منع كليك يمين
+        document.addEventListener('contextmenu', event => event.preventDefault());
+
+        // منع اختصارات المطورين (F12, Ctrl+Shift+I, Ctrl+U, إلخ)
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'F12' || 
+               (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) || 
+               (e.ctrlKey && (e.key === 'U' || e.key === 'u'))) {
+                e.preventDefault();
+                return false;
+            }
+        });
+
+        // منع السحب والإفلات
+        document.addEventListener('dragstart', event => event.preventDefault());
+        document.addEventListener('drop', event => event.preventDefault());
+
+        // منع تحديد النص خارج مربع البحث برمجياً
+        document.addEventListener('selectstart', (e) => {
+            if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                e.preventDefault();
+            }
+        });
+        // ---------------------------------
+
+        // --- إعدادات التطبيق (App Configuration) ---
+        // من هنا يمكنك تقييد التطبيق ليعرض مناطق معينة فقط أو جميع المناطق
+        const APP_CONFIG = {
+            showAllZones: false, 
+            allowedZones: ['سامراء', 'الدور', 'الدجيل'] 
+        };
+        // ------------------------------------------
+
+
+        // Data & Zones Mapping
+        const CSV_URL = 'https://raw.githubusercontent.com/Beezincbeta/m/refs/heads/main/sd_data.csv';
+        let map, featuresStore = [];
+        let geoJsonLayer;
+        let activeMarker = null;
+        let highlightedLayer = null;
+
+        // خريطة تصنيف المقاطعات الحكومية بناءً على الأرقام
+        const GOV_ZONES = [
+            { nameAr: 'تكريت', nameEn: 'TIKRIT', ranges: [[1, 44], [98, 99], [7000, 7300]], specials: [103] },
+            { nameAr: 'سامراء', nameEn: 'SAMARRA', ranges: [[45, 97], [100, 102], [253, 256]], specials: [] },
+            { nameAr: 'العلم', nameEn: 'ALAM', ranges: [[238, 252]], specials: [] },
+            { nameAr: 'الدجيل', nameEn: 'DUJAIL', ranges: [[192, 207]], specials: [] },
+            { nameAr: 'الضلوعية', nameEn: 'DHULUIYA', ranges: [[257, 272]], specials: [] },
+            { nameAr: 'طوز خورماتو', nameEn: 'TUZ', ranges: [[128, 162]], specials: [216] },
+            { nameAr: 'الدور', nameEn: 'DOOR', ranges: [[208, 215]], specials: [] },
+            { nameAr: 'سليمان بيك', nameEn: 'SULAIMAN BEK', ranges: [[278, 282]], specials: [] },
+            { nameAr: 'بيجي', nameEn: 'BAIJI', ranges: [[163, 191]], specials: [312] },
+            { nameAr: 'الشرقاط', nameEn: 'SHIRQAT', ranges: [[217, 237]], specials: [] },
+            { nameAr: 'الصينية', nameEn: 'SINIYA', ranges: [[288, 294]], specials: [] },
+            { nameAr: 'بلد', nameEn: 'BALAD', ranges: [[104, 127], [332, 343]], specials: [] },
+            { nameAr: 'آمرلي', nameEn: 'AMERLI', ranges: [[283, 287]], specials: [] },
+            { nameAr: 'الاسحاقي', nameEn: 'ISHAQI', ranges: [[313, 314]], specials: [] },
+            { nameAr: 'الحجاج', nameEn: 'HAJJAJ', ranges: [[304, 311]], specials: [315] },
+            { nameAr: 'الزاوية', nameEn: 'ZAWIYA', ranges: [[273, 277]], specials: [] },
+            { nameAr: 'سديرة', nameEn: 'SADIRA', ranges: [[322, 331]], specials: [346] },
+            { nameAr: 'ينكجة', nameEn: 'YANKAJA', ranges: [[296, 297]], specials: [] },
+            { nameAr: 'الشكرا', nameEn: 'SHUKRA', ranges: [[316, 321]], specials: [] },
+            { nameAr: 'الحجل', nameEn: 'HIJAL', ranges: [[298, 303]], specials: [344, 345] }
+        ];
+
+        // دالة لمعرفة المقاطعة من خلال اسم الفيتشر (استخراج الرقم منه)
+        function getZoneInfo(featureName) {
+            let num;
+            
+            // استخراج جميع المقاطع التي تبدأ بـ FAT أو FTK ومتبوعة برقم
+            const matches = featureName.match(/(?:FAT|FTK)[^\d]*(\d+)/gi);
+            
+            if (matches && matches.length > 0) {
+                // نأخذ المقطع الأخير دائماً (لتجاهل السوابق مثل FAT00- في الأسماء المركبة)
+                const lastMatch = matches[matches.length - 1];
+                // استخراج الرقم من المقطع الأخير
+                const numMatch = lastMatch.match(/(\d+)/);
+                if (numMatch) {
+                    num = parseInt(numMatch[1], 10);
+                }
+            } else {
+                // كخيار بديل: استخراج آخر رقم موجود في الاسم في حال عدم وجود FAT/FTK
+                const fallbackMatch = featureName.match(/(\d+)(?!.*\d)/);
+                if (!fallbackMatch) return { ar: 'غير محدد', en: 'UNKNOWN' };
+                num = parseInt(fallbackMatch[0], 10);
+            }
+            
+            for (const zone of GOV_ZONES) {
+                if (zone.specials.includes(num)) return { ar: zone.nameAr, en: zone.nameEn };
+                for (const range of zone.ranges) {
+                    if (num >= range[0] && num <= range[1]) return { ar: zone.nameAr, en: zone.nameEn };
+                }
+            }
+            return { ar: 'غير محدد', en: 'UNKNOWN' };
+        }
+
+        // Init Map
+        function initMap() {
+            map = L.map('map', { zoomControl: true, attributionControl: false }).setView([34.66, 43.65], 14);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                subdomains: 'abcd',
+                maxZoom: 20
+            }).addTo(map);
+
+            // إنشاء طبقات عرض (Panes) للتحكم في الترتيب
+            map.createPane('paneFTK');
+            map.getPane('paneFTK').style.zIndex = 400; // مستوى سفلي
+            
+            map.createPane('paneFAT');
+            map.getPane('paneFAT').style.zIndex = 450; // مستوى علوي (فوق FTK)
+
+            geoJsonLayer = L.geoJSON(null, {
+                style: feature => {
+                    const isFat = feature.properties.Name.startsWith('FAT');
+                    return {
+                        pane: isFat ? 'paneFAT' : 'paneFTK',
+                        color: isFat ? '#d97706' : '#2563eb', // Amber for FAT, Blue for FTK
+                        weight: 2,
+                        fillColor: isFat ? '#f59e0b' : '#3b82f6',
+                        fillOpacity: 0.15,
+                        dashArray: isFat ? '4, 4' : ''
+                    };
+                },
+                onEachFeature: (feature, layer) => {
+                    // الاعتماد على البيانات المجهزة والمفلترة مسبقاً أثناء التحميل لزيادة السرعة
+                    const zoneAr = feature.properties.ZoneAr || 'غير محدد';
+                    
+                    // تضمين اسم المنطقة والمقاطعة في النافذة المنبثقة
+                    layer.bindPopup(
+                        `<div class="text-sm font-black">${feature.properties.Name}</div>
+                         <div class="text-[11px] text-slate-300 mt-0.5">${zoneAr}</div>`, {
+                        className: 'custom-popup',
+                        closeButton: false
+                    });
+
+                    layer.on('click', (e) => {
+                        L.DomEvent.stopPropagation(e);
+                        handleZoneClick(feature, layer, e.latlng);
+                    });
+                }
+            }); // تم إزالة .addTo(map) من هنا لعدم عرض الطبقات افتراضياً
+
+            loadData();
+        }
+
+        // Load & Parse CSV Data
+        function loadData() {
+            Papa.parse(CSV_URL, {
+                download: true,
+                header: true,
+                skipEmptyLines: true,
+                complete: (results) => {
+                    results.data.forEach(row => {
+                        try {
+                            const geometry = JSON.parse(row.geometry.replace(/""/g, '"'));
+                            const name = row.Name.trim().toUpperCase();
+                            
+                            // 1. استخراج المقاطعة التي تنتمي إليها هذه المنطقة
+                            const zoneInfo = getZoneInfo(name);
+
+                            // 2. تطبيق فلتر الإعدادات (APP_CONFIG)
+                            // هل مسموح بعرض جميع المناطق؟ أو هل هذه المقاطعة موجودة ضمن القائمة المسموحة؟
+                            const isAllowed = APP_CONFIG.showAllZones || APP_CONFIG.allowedZones.includes(zoneInfo.ar);
+
+                            // 3. إضافة المنطقة فقط إذا كانت مسموحة في الإعدادات
+                            if (isAllowed) {
+                                // حفظ المقاطعة داخل خصائص الفيتشر (properties) لعدم إعادة حسابها لاحقاً
+                                const feature = { 
+                                    type: "Feature", 
+                                    geometry, 
+                                    properties: { 
+                                        Name: name,
+                                        ZoneAr: zoneInfo.ar,
+                                        ZoneEn: zoneInfo.en
+                                    } 
+                                };
+                                geoJsonLayer.addData(feature);
+                            }
+                        } catch (e) {
+                            // Silently ignore invalid geometry rows
+                        }
+                    });
+
+                    // Build searchable index
+                    geoJsonLayer.eachLayer(layer => {
+                        let bounds = null;
+                        if (typeof layer.getBounds === 'function') {
+                            bounds = layer.getBounds();
+                        } else if (typeof layer.getLatLng === 'function') {
+                            bounds = L.latLngBounds([layer.getLatLng()]);
+                        }
+
+                        // جلب البيانات التي قمنا بحفظها في الخطوة السابقة
+                        const featureName = layer.feature.properties.Name;
+                        const zoneAr = layer.feature.properties.ZoneAr;
+                        const zoneEn = layer.feature.properties.ZoneEn;
+
+                        featuresStore.push({
+                            name: featureName,
+                            zoneAr: zoneAr,
+                            zoneEn: zoneEn,
+                            layer: layer,
+                            bounds: bounds
+                        });
+                    });
+
+                    // Hide loading
+                    const loader = document.getElementById('loading');
+                    loader.style.opacity = '0';
+                    setTimeout(() => loader.style.display = 'none', 500);
+                }
+            });
+        }
+
+        // UI Interactions
+        const searchInput = document.getElementById('searchInput');
+        const suggestionsBox = document.getElementById('suggestions');
+        const clearBtn = document.getElementById('clearBtn');
+        const coordRegex = /^\s*(-?\d+(\.\d+)?)\s*,\s*(-?\d+(\.\d+)?)\s*$/;
+
+        searchInput.addEventListener('input', (e) => {
+            const val = e.target.value.trim().toUpperCase();
+            clearBtn.style.display = val ? 'block' : 'none';
+            
+            if (!val) {
+                suggestionsBox.classList.add('hidden');
+                return;
+            }
+
+            // If it looks like coordinates, don't show name suggestions
+            if (coordRegex.test(val)) {
+                suggestionsBox.innerHTML = `<li class="px-4 py-3 text-sm font-bold text-blue-600 hover:bg-slate-50 cursor-pointer border-b border-slate-50 transition-colors" onclick="searchCoordinates('${val}')">
+                    <div class="flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /></svg>
+                        الذهاب إلى الإحداثيات المكتوبة
+                    </div>
+                </li>`;
+                suggestionsBox.classList.remove('hidden');
+                return;
+            }
+
+            // البحث حسب الاسم أو المقاطعة (بالعربي أو الإنجليزي)
+            const matches = featuresStore.filter(f => 
+                f.name.includes(val) || 
+                f.zoneAr.includes(val) || 
+                f.zoneEn.includes(val)
+            ).slice(0, 20); // زيادة الحد الأقصى قليلاً لتغطية نتائج المقاطعات
+            
+            if (matches.length > 0) {
+                suggestionsBox.innerHTML = matches.map(m => 
+                    `<li class="px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 cursor-pointer border-b border-slate-50 transition-colors flex justify-between items-center" onclick="searchName('${m.name}')">
+                        <span>${m.name.replace(new RegExp(val, 'gi'), match => `<span class="text-blue-600">${match}</span>`)}</span>
+                        <span class="text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded-md max-w-[100px] text-center truncate">${m.zoneAr}</span>
+                    </li>`
+                ).join('');
+                suggestionsBox.classList.remove('hidden');
+            } else {
+                suggestionsBox.innerHTML = `<li class="px-4 py-3 text-sm font-bold text-slate-400 text-center">لا توجد نتائج مطابقة</li>`;
+                suggestionsBox.classList.remove('hidden');
+            }
+        });
+
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const val = searchInput.value.trim();
+                if (coordRegex.test(val)) searchCoordinates(val);
+                else if (val) {
+                    // Try to find exact match first, else first partial match
+                    const exact = featuresStore.find(f => f.name === val.toUpperCase());
+                    if (exact) searchName(exact.name);
+                    else {
+                        const partial = featuresStore.find(f => f.name.includes(val.toUpperCase()) || f.zoneAr.includes(val) || f.zoneEn.includes(val.toUpperCase()));
+                        if (partial) searchName(partial.name);
+                    }
+                }
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            searchInput.value = '';
+            clearBtn.style.display = 'none';
+            suggestionsBox.classList.add('hidden');
+            resetHighlight();
+            searchInput.focus();
+        });
+
+        // Search Handlers
+        window.searchName = (name) => {
+            searchInput.value = name;
+            suggestionsBox.classList.add('hidden');
+            
+            const target = featuresStore.find(f => f.name === name);
+            if (target) {
+                if (target.bounds && target.bounds.isValid && target.bounds.isValid()) {
+                    // Adjust padding to account for bottom search bar on mobile
+                    const paddingOptions = window.innerWidth < 768 ? [50, 200] : [50, 50]; 
+                    map.fitBounds(target.bounds, { padding: paddingOptions, maxZoom: 17 });
+                    const center = target.bounds.getCenter();
+                    doCopy(center.lat, center.lng, name);
+                } else if (target.layer && typeof target.layer.getLatLng === 'function') {
+                    const ll = target.layer.getLatLng();
+                    map.setView(ll, 17);
+                    doCopy(ll.lat, ll.lng, name);
+                }
+                highlightZone(target.layer);
+            }
+        };
+
+        window.searchCoordinates = (val) => {
+            suggestionsBox.classList.add('hidden');
+            const match = val.match(coordRegex);
+            if (match) {
+                const lat = parseFloat(match[1]);
+                const lng = parseFloat(match[3]);
+                
+                if(activeMarker) map.removeLayer(activeMarker);
+                
+                let foundName = "موقع غير محدد";
+                let foundZone = "غير محدد";
+                let matchedLayer = null;
+
+                for (let f of featuresStore) {
+                    // 1. تحقق سريع وسياقي (لتحسين الأداء) من وجود الإحداثيات ضمن المربع الشامل للمنطقة
+                    if (f.bounds && f.bounds.isValid && f.bounds.isValid() && f.bounds.contains(L.latLng(lat, lng))) {
+                        // 2. فحص دقيق للحدود الهندسية الفعلية (المضلع الجغرافي الدقيق للمنطقة)
+                        if (f.layer && f.layer.feature && isPointInFeature(lat, lng, f.layer.feature)) {
+                            foundName = f.name;
+                            foundZone = f.zoneAr;
+                            matchedLayer = f.layer;
+                            break;
+                        }
+                    }
+                }
+
+                // إجراء احتياطي في حال كانت البيانات عبارة عن نقطة فقط وليست مضلعاً
+                if (!matchedLayer) {
+                     for (let f of featuresStore) {
+                         if (f.bounds && f.bounds.isValid && f.bounds.isValid() && f.bounds.contains(L.latLng(lat, lng))) {
+                             foundName = f.name;
+                             foundZone = f.zoneAr;
+                             matchedLayer = f.layer;
+                             break;
+                         }
+                     }
+                }
+
+                if (matchedLayer) {
+                    highlightZone(matchedLayer);
+                } else {
+                    resetHighlight(); // إخفاء أي منطقة سابقة إذا لم توجد منطقة مطابقة
+                }
+
+                map.setView([lat, lng], 18);
+                activeMarker = L.circleMarker([lat, lng], {
+                    radius: 8, color: '#fff', weight: 2, fillColor: '#ef4444', fillOpacity: 1
+                }).addTo(map).bindPopup(
+                    `<div class="text-sm font-black">${foundName}</div>
+                     <div class="text-[11px] text-slate-300 mt-0.5">${foundZone}</div>`, 
+                    { className: 'custom-popup' }
+                ).openPopup();
+
+                doCopy(lat, lng, foundName);
+            }
+        };
+
+        // --- خوارزمية للتحقق الدقيق من وقوع النقطة داخل مضلع المنطقة ---
+        function isPointInFeature(lat, lng, feature) {
+            if (!feature || !feature.geometry) return false;
+            const type = feature.geometry.type;
+            const coords = feature.geometry.coordinates;
+            const pt = [lng, lat]; // إحداثيات GeoJSON تكون [طول, عرض]
+
+            if (type === 'Polygon' && coords.length > 0) {
+                return isPointInPolygon(pt, coords[0]);
+            } else if (type === 'MultiPolygon') {
+                for (let i = 0; i < coords.length; i++) {
+                    if (coords[i].length > 0 && isPointInPolygon(pt, coords[i][0])) return true;
+                }
+            }
+            return false;
+        }
+
+        function isPointInPolygon(point, vs) {
+            let x = point[0], y = point[1];
+            let inside = false;
+            for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+                let xi = vs[i][0], yi = vs[i][1];
+                let xj = vs[j][0], yj = vs[j][1];
+                let intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
+
+        // Zone Click Handler
+        function handleZoneClick(feature, layer, latlng) {
+            highlightZone(layer);
+            const paddingOptions = window.innerWidth < 768 ? [50, 200] : [50, 50]; 
+            map.fitBounds(layer.getBounds(), { padding: paddingOptions, maxZoom: 17 });
+            doCopy(latlng.lat, latlng.lng, feature.properties.Name);
+        }
+
+        // Highlight Helper
+        function highlightZone(layer) {
+            resetHighlight();
+            
+            // إضافة المنطقة المستهدفة فقط إلى الخريطة
+            layer.addTo(map);
+
+            highlightedLayer = {
+                layer: layer,
+                originalStyle: { ...layer.options }
+            };
+            layer.setStyle({ fillOpacity: 0.6, weight: 4, color: '#10b981' }); // Highlight Green
+            layer.openPopup();
+        }
+
+        function resetHighlight() {
+            if (highlightedLayer) {
+                highlightedLayer.layer.setStyle({
+                    fillOpacity: highlightedLayer.originalStyle.fillOpacity,
+                    weight: highlightedLayer.originalStyle.weight,
+                    color: highlightedLayer.originalStyle.color
+                });
+                // إزالة المنطقة من الخريطة عند بدء بحث جديد أو مسح البحث
+                map.removeLayer(highlightedLayer.layer);
+                highlightedLayer = null;
+            }
+            if (activeMarker) {
+                map.removeLayer(activeMarker);
+                activeMarker = null;
+            }
+        }
+
+        // Copy Engine & Notification
+        function doCopy(lat, lng, name) {
+            const textToCopy = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+            
+            // iFrame safe copy using execCommand
+            const textArea = document.createElement("textarea");
+            textArea.value = textToCopy;
+            textArea.style.position = "fixed";
+            textArea.style.left = "-999999px";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            
+            try {
+                document.execCommand('copy');
+                showToast(`تم نسخ: ${name}`);
+            } catch (err) {
+                console.error('Copy failed', err);
+            }
+            document.body.removeChild(textArea);
+        }
+
+        let toastTimeout;
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toastText').innerText = msg;
+            
+            toast.classList.remove('hidden');
+            toast.classList.remove('toast-enter');
+            void toast.offsetWidth; // trigger reflow
+            toast.classList.add('toast-enter');
+
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast.classList.add('hidden');
+                toast.classList.remove('toast-enter');
+            }, 3500);
+        }
+
+        // Click outside suggestions closes it
+        document.addEventListener('click', (e) => {
+            if (!searchInput.contains(e.target) && !suggestionsBox.contains(e.target)) {
+                suggestionsBox.classList.add('hidden');
+            }
+        });
+
+        // Bootstrap App
+        window.onload = initMap;
+    </script>
+</body>
+</html>
